@@ -1,20 +1,21 @@
-import os
 import sys
+import fileinput
 
 
 def read_data():
     """
     コマンドライン引数の一番目で指定されたファイルから読み取り、一行ずつリストにして返す。
-    コマンドライン引数が指定されなかった場合は、usageを表示してプログラムを終了する。
+    コマンドライン引数が指定されなかった場合は、標準入力を読み取る
     """
-    if len(sys.argv) < 2:
-        print("usage: python3 assembler.py input-file [output-file]", file=sys.stderr)
-        exit(1)
-    path_in = sys.argv[1]
-    fin = open(path_in)
-    s = [tmp.strip() for tmp in fin.readlines()]
-    fin.close()
-    return s
+    data = []
+    for line in fileinput.input(encoding="utf-8"):
+        s = line.strip()
+        if not s:
+            if fileinput.isstdin():
+                break # 標準入力のとき空行があったら終了
+        else:
+            data.append(s)
+    return data
 
 
 def preproc(line):
@@ -238,7 +239,10 @@ def write_result(result):
             print("\t" + str(i) + " : " + result[i] + ";")
         print("END;")
 
+def main():
+    data = read_data()
+    result = assemble(data)
+    write_result(result)
 
-data = read_data()
-result = assemble(data)
-write_result(result)
+if __name__ == "__main__":
+    main()
