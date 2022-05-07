@@ -1,19 +1,22 @@
 import sys
 import fileinput
 import re
+import argparse
 
 
-def read_data():
+def read_data(infile):
     """
     コマンドライン引数の一番目で指定されたファイルから読み取り、一行ずつリストにして返す。
     コマンドライン引数が指定されなかった場合は、標準入力を読み取る。
     """
+    if not infile:
+        infile = []
     data = []
-    for line in fileinput.input(encoding="utf-8"):
+    for line in fileinput.input(files=infile, encoding="utf-8"):
         s = line.strip()
         data.append(s)
         if not s and fileinput.isstdin():
-                break # 標準入力のとき空行があったら終了
+            break # 標準入力のとき空行があったら終了
     return data
 
 
@@ -52,6 +55,11 @@ def to_binary(num, digit, signed=False):
 
 
 def assemble(data):
+    """
+      下処理された cmd と args の列を受け取り, 2進数の命令列を返す
+      それぞれの cmd に対応した関数に args を渡すことで変換を行う
+      命令を追加するときは inst に関数を追加する
+    """
     result = []
     inst = { # 引数の数が多すぎるときに例外を発生させるため
         "ADD": lambda rd, rs:
@@ -111,7 +119,7 @@ def assemble(data):
         try:
             if cmd in inst:
                 result.append(inst[cmd](*args))
-            elif cmd.isdigit() or (cmd[0] == "-" and cmd[1:].isdigit()):
+            elif cmd.isdigit() or (cmd[0] == "-" and cmd[1:].isdigit()): # 命令ではない値
                 result.append(to_binary(int(cmd), 16, signed=True))
             else:
                 print(str(i + 1) + "行目:コマンド名が正しくありません", file=sys.stderr)
@@ -124,41 +132,89 @@ def assemble(data):
             exit(1)
     return result
 
+def format_result(result, address_radix=10, data_radix=10,
+                  width=16, depth=4096, fill=0, **kwargs):
+    """
+      アセンブルした二進数のリストを適当な形式に整えたものを返す
+      アドレスの基数, データの基数をそれぞれ 2, 10, 16 から選ぶことができる
+      ワード幅やメモリの語数を指定することができる
+      ただし命令長を16ビットとしてアセンブリしているのでワード幅を変更すると正しい結果が得られないことがある
+      命令を書き終えた残りのメモリに書き込む値を指定することができる
+    """
+    radix = {
+        2: ("BIN", "b"),
+        10: ("DEC", "d"),
+        16: ("HEX", "x")
+    }
+    rdx_a, fmt_a = radix[address_radix]
+    rdx_d, fmt_d = radix[data_radix]
+    
+    header = f"""WIDTH={width};
+DEPTH={depth};
+ADDRESS_RADIX={rdx_a};
+DATA_RADIX={rdx_d};
+CONTENT BEGIN"""
+    
+    if address_radix == 10: # 基数が10のとき0埋めしない
+        padding_a = 0
+    else: 
+        padding_a = len(f"{depth-1 : {fmt_a}}")
+    if data_radix == 10:
+        padding_d = 0
+    else: 
+        padding_d = len(f"{2**width-1 : {fmt_d}}")
 
-def write_result(result):
+    formatted = [header]
+    for i, bin_inst in enumerate(result):
+        if address_radix == 10:
+            address = i
+        else:
+            address = f"{i : 0{padding_a}{fmt_a}}"
+        if data_radix == 10:
+            if bin_inst[0] == "1":
+                inst = str(int(bin_inst, 2) - 2**width)
+            else:
+                inst = str(int(bin_inst, 2))
+        else:
+            inst = f"{int(bin_inst, 2) : 0{padding_d}{fmt_d}}"
+        formatted.append(f"{address} : {inst};")
+    formatted.append(
+        f"[{len(result): 0{padding_a}{fmt_a}} ..{depth-1: 0{padding_a}{fmt_a}}] : {fill: 0{padding_d}{fmt_d}};")
+    formatted.append("END;")
+
+    return "\n".join(formatted)
+
+def write_result(result, output = None, **kwargs):
     """
       アセンブルした二進数のリストを書き込む
       書き込み先は、コマンドライン引数によって指定された場合はそのファイル、
       されなかった場合は標準出力
-      ワード幅は16,ワード数は256としている
-      DATA_RADIXは二進数、ADDRESS_RADIXはDECとしているが
-      HEXのほうがよいか？
     """
-    if len(sys.argv) >= 3:
-        fout = open(sys.argv[2], mode="w")
-        fout.write("WIDTH=16;\n")
-        fout.write("DEPTH=256;\n")
-        fout.write("ADDRESS_RADIX=DEC;\n")
-        fout.write("DATA_RADIX=BIN;\n")
-        fout.write("CONTENT BEGIN\n")
-        for i in range(len(result)):
-            fout.write("\t" + str(i) + " : " + result[i] + ";\n")
-        fout.write("END;\n")
-        fout.close()
+    s = format_result(result, **kwargs)
+    if output:
+        try:
+            with open(output, "w") as f:
+                f.write(s)
+                print(f"{output} に書き込みました")
+        except Exception as e:
+            print(f"ファイル {output} を開けなかったので標準出力に出力します" , e, file=sys.stderr)
+            print(s)
     else:
-        print("WIDTH=16;")
-        print("DEPTH=256;")
-        print("ADDRESS_RADIX=DEC;")
-        print("DATA_RADIX=BIN;")
-        print("CONTENT BEGIN")
-        for i in range(len(result)):
-            print("\t" + str(i) + " : " + result[i] + ";")
-        print("END;")
+        print(s)
 
 def main():
-    data = read_data()
+    parser = argparse.ArgumentParser(description="SIMPLEアセンブラ")
+    parser.add_argument("input", help="入力ファイル (デフォルト: 標準入力)", nargs="?")
+    parser.add_argument("output", help="出力ファイル (デフォルト: 標準出力)", nargs="?")
+    parser.add_argument("-d", "--depth", help="ワード数 (デフォルト: 4096)", type=int, nargs="?", default=4096)
+    parser.add_argument("-ar", "--address_radix", help="アドレスの基数 (デフォルト: 10)", type=int, nargs="?", default=10, choices=[2, 10, 16])
+    parser.add_argument("-dr", "--data_radix", help="データの基数 (デフォルト: 10)", type=int, nargs="?", default=10, choices=[2, 10, 16])
+    parser.add_argument("-f", "--fill", help="空きメモリに埋める数 (デフォルト: 0)", type=int, nargs="?", default=0)
+    args = parser.parse_args()
+
+    data = read_data(args.input)
     result = assemble(data)
-    write_result(result)
+    write_result(result, **vars(args)) # 全部渡す
 
 if __name__ == "__main__":
     main()
