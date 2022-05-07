@@ -1,52 +1,38 @@
 import sys
 import fileinput
+import re
 
 
 def read_data():
     """
     コマンドライン引数の一番目で指定されたファイルから読み取り、一行ずつリストにして返す。
-    コマンドライン引数が指定されなかった場合は、標準入力を読み取る
+    コマンドライン引数が指定されなかった場合は、標準入力を読み取る。
     """
     data = []
     for line in fileinput.input(encoding="utf-8"):
         s = line.strip()
-        if not s:
-            if fileinput.isstdin():
+        data.append(s)
+        if not s and fileinput.isstdin():
                 break # 標準入力のとき空行があったら終了
-        else:
-            data.append(s)
     return data
 
 
 def preproc(line):
     """
       一行の命令を命令名と引数の列に分解する。
-      引数はカンマ区切りで分割され、前から順番にargsに入る。
+      引数は英数字以外の文字で分割され、前から順番にargsに入る。
       d(Rb)の形式のものは、d,Rbの順でargsに入る。
     """
-    head, tail = "", ""
-    for i in range(len(line)):
-        if line[i] == " ":
-            tail = line[i + 1 :]
-            break
-        head += line[i]
+    if "//" in line:
+        line = line[:line.find("//")]
+    head, *tail = re.findall(r"[a-zA-Z]+|[-+]?\d+", line)
     cmd = head.upper()
-    tmp = [s.strip() for s in tail.split(",") if not s == ""]
     args = []
-    for i in range(len(tmp)):
-        if "(" in tmp[i] and ")" in tmp[i]:
-            a = tmp[i][: tmp[i].find("(")].strip()
-            b = tmp[i][tmp[i].find("(") + 1 : tmp[i].find(")")].strip()
-            try:
-                args.append(int(a))
-                args.append(int(b))
-            except Exception:
-                raise ValueError
-        else:
-            try:
-                args.append(int(tmp[i]))
-            except Exception:
-                raise ValueError
+    for i in tail:
+        try:
+            args.append(int(i))
+        except Exception:
+            raise ValueError(i)
     return cmd, args
 
 
@@ -67,144 +53,74 @@ def to_binary(num, digit, signed=False):
 
 def assemble(data):
     result = []
-    for i in range(len(data)):
+    inst = { # 引数の数が多すぎるときに例外を発生させるため
+        "ADD": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0000" + "0000",
+        "SUB": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0001" + "0000",
+        "AND": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0010" + "0000",
+        "OR": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0011" + "0000",
+        "XOR": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0100" + "0000",
+        "CMP": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0101" + "0000",
+        "MOV": lambda rd, rs:
+            "11" + to_binary(rs, 3) + to_binary(rd, 3) + "0110" + "0000",
+        "SLL": lambda rd, d:        
+            "11" + "000" + to_binary(rd, 3) + "1000" + to_binary(d, 4),
+        "SLR": lambda rd, d:        
+            "11" + "000" + to_binary(rd, 3) + "1001" + to_binary(d, 4),
+        "SRL": lambda rd, d:        
+            "11" + "000" + to_binary(rd, 3) + "1010" + to_binary(d, 4),
+        "SRA": lambda rd, d:        
+            "11" + "000" + to_binary(rd, 3) + "1011" + to_binary(d, 4),
+        "IN": lambda rd: 
+            "11" + "000" + to_binary(rd, 3) + "1100" + "0000",
+        "OUT": lambda rs:
+            "11" + to_binary(rs, 3) + "000" + "1101" + "0000",
+        "HLT": lambda:
+            "11" + "000" + "000" + "1111" + "0000",
+        "LD": lambda ra, d, rb:
+            "00" + to_binary(ra, 3) + to_binary(rb, 3) + to_binary(d, 8, True),
+        "ST": lambda ra, d, rb:
+            "01" + to_binary(ra, 3) + to_binary(rb, 3) + to_binary(d, 8, True),
+        "LI": lambda rb, d:
+            "10" + "000" + to_binary(rb, 3) + to_binary(d, 8, signed=True),
+        "B": lambda d:
+            "10" + "100" + "000" + to_binary(d, 8, signed=True),
+        "BE": lambda d:
+            "10" + "111" + "000" + to_binary(d, 8, signed=True),
+        "BLT": lambda d:
+            "10" + "111" + "001" + to_binary(d, 8, signed=True),
+        "BLE": lambda d:
+            "10" + "111" + "010" + to_binary(d, 8, signed=True),
+        "BNE": lambda d:
+            "10" + "111" + "011" + to_binary(d, 8, signed=True)
+    }
+    for i, line in enumerate(data):
+        if not line or line.startswith("//"):
+            continue
         cmd, args = "", []
         try:
             cmd, args = preproc(data[i])
-        except ValueError:
-            print(str(i + 1) + "行目: 命令の引数が不正です", file=sys.stderr)
+        except ValueError as e:
+            print(str(i + 1) + "行目: 命令の引数が不正です", e, file=sys.stderr)
             exit(1)
         try:
-            if cmd == "ADD":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0000"
-                    + "0000"
-                )
-            elif cmd == "SUB":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0001"
-                    + "0000"
-                )
-            elif cmd == "AND":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0010"
-                    + "0000"
-                )
-            elif cmd == "OR":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0011"
-                    + "0000"
-                )
-            elif cmd == "XOR":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0100"
-                    + "0000"
-                )
-            elif cmd == "CMP":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0101"
-                    + "0000"
-                )
-            elif cmd == "MOV":
-                result.append(
-                    "11"
-                    + to_binary(args[1], 3)
-                    + to_binary(args[0], 3)
-                    + "0110"
-                    + "0000"
-                )
-            elif cmd == "SLL":
-                result.append(
-                    "11"
-                    + "000"
-                    + to_binary(args[0], 3)
-                    + "1000"
-                    + to_binary(args[1], 4)
-                )
-            elif cmd == "SLR":
-                result.append(
-                    "11"
-                    + "000"
-                    + to_binary(args[0], 3)
-                    + "1001"
-                    + to_binary(args[1], 4)
-                )
-            elif cmd == "SRL":
-                result.append(
-                    "11"
-                    + "000"
-                    + to_binary(args[0], 3)
-                    + "1010"
-                    + to_binary(args[1], 4)
-                )
-            elif cmd == "SRA":
-                result.append(
-                    "11"
-                    + "000"
-                    + to_binary(args[0], 3)
-                    + "1011"
-                    + to_binary(args[1], 4)
-                )
-            elif cmd == "IN":
-                result.append("11" + "000" + to_binary(args[0], 3) + "1100" + "0000")
-            elif cmd == "OUT":
-                result.append("11" + to_binary(args[0], 3) + "000" + "1101" + "0000")
-            elif cmd == "HLT":
-                result.append("11" + "000" + "000" + "1111" + "0000")
-            elif cmd == "LD":
-                result.append(
-                    "00"
-                    + to_binary(args[0], 3)
-                    + to_binary(args[2], 3)
-                    + to_binary(args[1], 8, signed=True)
-                )
-            elif cmd == "ST":
-                result.append(
-                    "01"
-                    + to_binary(args[0], 3)
-                    + to_binary(args[2], 3)
-                    + to_binary(args[1], 8, signed=True)
-                )
-            elif cmd == "LI":
-                result.append(
-                    "10"
-                    + "000"
-                    + to_binary(args[0], 3)
-                    + to_binary(args[1], 8, signed=True)
-                )
-            elif cmd == "B":
-                result.append("10" + "100" + "000" + to_binary(args[0], 8, signed=True))
-            elif cmd == "BE":
-                result.append("10" + "111" + "000" + to_binary(args[0], 8, signed=True))
-            elif cmd == "BLT":
-                result.append("10" + "111" + "001" + to_binary(args[0], 8, signed=True))
-            elif cmd == "BLE":
-                result.append("10" + "111" + "010" + to_binary(args[0], 8, signed=True))
-            elif cmd == "BNE":
-                result.append("10" + "111" + "011" + to_binary(args[0], 8, signed=True))
+            if cmd in inst:
+                result.append(inst[cmd](*args))
+            elif cmd.isdigit() or (cmd[0] == "-" and cmd[1:].isdigit()):
+                result.append(to_binary(int(cmd), 16, signed=True))
             else:
                 print(str(i + 1) + "行目:コマンド名が正しくありません", file=sys.stderr)
                 exit(1)
         except ValueError as e:
             print(str(i + 1) + "行目 " + str(e) + ": 値の大きさが不正です", file=sys.stderr)
+            exit(1)
+        except TypeError as e:
+            print(str(i + 1) + "行目 : 引数の数が不正です", e, file=sys.stderr)
             exit(1)
     return result
 
