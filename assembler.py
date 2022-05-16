@@ -1,5 +1,4 @@
 import sys
-import fileinput
 import re
 import argparse
 
@@ -9,14 +8,20 @@ def read_data(infile):
     コマンドライン引数の一番目で指定されたファイルから読み取り、一行ずつリストにして返す。
     コマンドライン引数が指定されなかった場合は、標準入力を読み取る。
     """
-    if not infile:
-        infile = []
+    try:
+        with open(infile, errors="ignore") as f:
+            data = [line.strip() for line in f.readlines()]
+            return data
+    except Exception as e:
+        if infile:
+            print(e)
     data = []
-    for line in fileinput.input(files=infile, encoding="utf-8"):
-        s = line.strip()
-        data.append(s)
-        if not s and fileinput.isstdin():
-            break # 標準入力のとき空行があったら終了
+    print("命令列を入力してください")
+    while True:
+        line = input().strip()
+        if not line:
+            break
+        data.append(line)
     return data
 
 
@@ -26,8 +31,6 @@ def preproc(line):
       引数は英数字以外の文字で分割され、前から順番にargsに入る。
       d(Rb)の形式のものは、d,Rbの順でargsに入る。
     """
-    if "//" in line:
-        line = line[:line.find("//")]
     head, *tail = re.findall(r"[a-zA-Z]+|[-+]?\d+", line)
     cmd = head.upper()
     args = []
@@ -112,7 +115,7 @@ def assemble(data):
             continue
         cmd, args = "", []
         try:
-            cmd, args = preproc(data[i])
+            cmd, args = preproc(line)
         except ValueError as e:
             print(str(i + 1) + "行目: 命令の引数が不正です", e, file=sys.stderr)
             exit(1)
